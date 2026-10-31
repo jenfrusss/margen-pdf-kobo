@@ -14,6 +14,8 @@ Arrastra uno o varios PDF. Puedes elegir EPUB o KEPUB, traducir el texto de espa
 
 Conecta el Kobo al ordenador y toca **Conectar** en la pantalla del lector. La app comprueba periódicamente si aparece una unidad Kobo; también puedes pulsar **Actualizar**. Después de convertir, pulsa **Enviar al Kobo** junto al libro. El archivo se copia a la carpeta principal de la unidad y la app muestra la ruta final. Si ya existe otro libro con ese nombre, crea una copia numerada sin reemplazar el anterior. [Expulsa el dispositivo de forma segura](https://help.kobo.com/hc/en-us/articles/360017765933-Eject-your-Kobo-eReader-when-connected-to-a-computer) antes de desconectarlo. La detección requiere que el lector esté montado como unidad y tenga su carpeta `.kobo`.
 
+En Windows puedes pulsar **Expulsar Kobo** en la app. Usa la acción de expulsión de Windows sobre la unidad Kobo seleccionada y espera a que el sistema la retire. Solo cuando la app confirme la expulsión debes desconectar el cable. Si Windows indica que hay archivos abiertos o no confirma la expulsión, ciérralos y vuelve a intentar.
+
 ## Alcance
 
 - Acepta PDF de hasta 80 MB por archivo con texto seleccionable.

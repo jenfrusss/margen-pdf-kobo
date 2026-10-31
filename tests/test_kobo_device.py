@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import kobo_device
@@ -39,6 +40,18 @@ class KoboDeviceTest(unittest.TestCase):
             self.assertEqual(client.get("/devices").json, {"devices": []})
         response = client.post("/send-to-kobo", json={"job": "../outside", "filename": "book.epub", "device": "E:\\"})
         self.assertEqual(response.status_code, 400)
+
+    def test_eject_requests_windows_action_and_waits_for_disconnect(self):
+        device = {"id": "E:\\", "label": "KOBOeReader", "path": "E:\\"}
+        with patch.object(kobo_device, "connected_kobos", side_effect=[[device], []]), patch.object(kobo_device.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
+            kobo_device.eject_kobo("E:\\")
+            self.assertEqual(run.call_args.kwargs["env"]["MARGEN_KOBO_DRIVE"], "E:")
+
+    def test_eject_api_reports_failure(self):
+        client = web_app.app.test_client()
+        with patch.object(web_app, "eject_kobo", side_effect=RuntimeError("Windows rechazó la expulsión")):
+            response = client.post("/eject-kobo", json={"device": "E:\\"})
+            self.assertEqual(response.status_code, 422)
 
 
 if __name__ == "__main__":

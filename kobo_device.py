@@ -4,7 +4,9 @@ from __future__ import annotations
 import ctypes
 import os
 import shutil
+import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -84,3 +86,36 @@ def copy_to_kobo(source: Path, device_id: str):
         except OSError:
             pass
     return str(target)
+
+
+def eject_kobo(device_id: str):
+    if sys.platform != "win32":
+        raise RuntimeError("La expulsión desde la app está disponible en Windows.")
+    device = next((item for item in connected_kobos() if item["id"] == device_id), None)
+    if device is None:
+        raise ValueError("No se detecta ese Kobo. Actualiza el estado del dispositivo.")
+    root = Path(device["path"])
+    if len(root.drive) != 2 or root.drive[1] != ":" or not root.drive[0].isalpha():
+        raise ValueError("La unidad del Kobo no es válida.")
+    script = (
+        "$ErrorActionPreference='Stop'; "
+        "$shell=New-Object -ComObject Shell.Application; "
+        "$item=$shell.Namespace(17).ParseName($env:MARGEN_KOBO_DRIVE); "
+        "if($null -eq $item){throw 'No se encuentra la unidad.'}; "
+        "$verb=$item.Verbs() | Where-Object { ($_.Name -replace '&','').Trim() -match '^(Eject|Expulsar)$' } | Select-Object -First 1; "
+        "if($null -eq $verb){throw 'Windows no ofrece la acción Expulsar para esta unidad.'}; "
+        "$verb.DoIt()"
+    )
+    environment = os.environ.copy()
+    environment["MARGEN_KOBO_DRIVE"] = root.drive
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-Command", script],
+        capture_output=True, text=True, timeout=20, env=environment,
+    )
+    if result.returncode:
+        raise RuntimeError("Windows no pudo expulsar el Kobo. Cierra archivos abiertos e inténtalo otra vez.")
+    for _ in range(20):
+        if not any(item["id"] == device_id for item in connected_kobos()):
+            return
+        time.sleep(0.5)
+    raise RuntimeError("Windows no confirmó la expulsión. Usa «Quitar hardware de forma segura» antes de desconectarlo.")

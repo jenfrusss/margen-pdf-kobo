@@ -7,7 +7,11 @@ const deviceStatus = document.querySelector('#device-status');
 const deviceHint = document.querySelector('#device-hint');
 const deviceChoice = document.querySelector('#device-choice');
 const deviceSelect = document.querySelector('#device-select');
+const ejectButton = document.querySelector('#device-eject');
 let files = [];
+let ejecting = false;
+let lastEjected = false;
+let ejectMessage = '';
 
 function draw() {
   queue.innerHTML = '';
@@ -45,6 +49,7 @@ for (const event of ['dragleave', 'drop']) drop.addEventListener(event, e => { e
 drop.addEventListener('drop', e => add(e.dataTransfer.files));
 
 async function refreshDevices() {
+  if (ejecting) return;
   try {
     const response = await fetch('/devices', { cache: 'no-store' });
     if (!response.ok) throw new Error('No se pudo consultar el dispositivo.');
@@ -59,18 +64,46 @@ async function refreshDevices() {
     }
     if (devices.some(device => device.id === previous)) deviceSelect.value = previous;
     deviceChoice.hidden = !devices.length;
-    deviceStatus.textContent = devices.length ? (devices.length === 1 ? 'Kobo conectado' : devices.length + ' Kobo conectados') : 'Kobo no conectado';
-    deviceHint.textContent = devices.length ? 'Puedes enviar el libro al terminar de convertir.' : 'Conecta el lector por USB y toca «Conectar» en su pantalla.';
+    ejectButton.disabled = !devices.length;
+    if (devices.length) lastEjected = false;
+    deviceStatus.textContent = devices.length ? (devices.length === 1 ? 'Kobo conectado' : devices.length + ' Kobo conectados') : (lastEjected ? 'Kobo expulsado con seguridad' : 'Kobo no conectado');
+    deviceHint.textContent = ejectMessage || (devices.length ? 'Puedes enviar el libro al terminar de convertir.' : (lastEjected ? 'Ya puedes desconectarlo.' : 'Conecta el lector por USB y toca «Conectar» en su pantalla.'));
     document.querySelectorAll('.send-kobo').forEach(send => { if (!send.dataset.sent) send.disabled = !devices.length; });
   } catch {
     deviceStatus.textContent = 'No se pudo comprobar el Kobo';
     deviceHint.textContent = 'Pulsa Actualizar para intentarlo de nuevo.';
     deviceChoice.hidden = true;
+    ejectButton.disabled = true;
     document.querySelectorAll('.send-kobo').forEach(send => { send.disabled = true; });
   }
 }
 
-document.querySelector('#device-refresh').onclick = refreshDevices;
+document.querySelector('#device-refresh').onclick = () => { ejectMessage = ''; refreshDevices(); };
+ejectButton.onclick = async () => {
+  const device = deviceSelect.value;
+  if (!device || ejecting) return;
+  ejecting = true;
+  ejectButton.disabled = true;
+  ejectButton.textContent = 'Expulsando…';
+  deviceHint.textContent = 'Espera a que Windows termine de expulsar el lector.';
+  try {
+    const response = await fetch('/eject-kobo', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'No se pudo expulsar el Kobo.');
+    lastEjected = true;
+    ejectMessage = '';
+  } catch (error) {
+    lastEjected = false;
+    ejectMessage = error.message;
+  } finally {
+    ejecting = false;
+    ejectButton.textContent = 'Expulsar Kobo';
+    await refreshDevices();
+  }
+};
 refreshDevices();
 setInterval(refreshDevices, 8000);
 

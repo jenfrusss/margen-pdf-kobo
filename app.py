@@ -1,16 +1,19 @@
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
+from threading import Lock
 from uuid import uuid4
 
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 from converter import convert
-from kobo_device import connected_kobos, copy_to_kobo
+from kobo_device import connected_kobos, copy_to_kobo, eject_kobo
 
 BASE = Path(__file__).resolve().parent
 OUTPUTS = BASE / "outputs"
 KEPUBIFY = BASE / "tools" / "kepubify.exe"
+DEVICE_LOCK = Lock()
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 
@@ -78,9 +81,24 @@ def send_to_kobo():
     if not isinstance(device_id, str):
         return jsonify(error="Selecciona un Kobo válido."), 400
     try:
-        path = copy_to_kobo(OUTPUTS / job / filename, device_id)
+        with DEVICE_LOCK:
+            path = copy_to_kobo(OUTPUTS / job / filename, device_id)
         return jsonify(path=path)
     except (ValueError, OSError) as exc:
+        return jsonify(error=str(exc)), 422
+
+
+@app.post("/eject-kobo")
+def eject_device():
+    data = request.get_json(silent=True) or {}
+    device_id = data.get("device", "")
+    if not isinstance(device_id, str):
+        return jsonify(error="Selecciona un Kobo válido."), 400
+    try:
+        with DEVICE_LOCK:
+            eject_kobo(device_id)
+        return jsonify(message="Kobo expulsado con seguridad. Ya puedes desconectarlo.")
+    except (ValueError, OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         return jsonify(error=str(exc)), 422
 
 
