@@ -1,19 +1,25 @@
 from pathlib import Path
 import subprocess
+import json
+from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
-from threading import Lock
+from threading import Lock, Event, Thread
 from uuid import uuid4
 
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 from converter import convert
+from book_tools import analyze_pdf
 from kobo_device import connected_kobos, copy_to_kobo, eject_kobo
 
 BASE = Path(__file__).resolve().parent
 OUTPUTS = BASE / "outputs"
+UPLOADS = BASE / "uploads"
 KEPUBIFY = BASE / "tools" / "kepubify.exe"
 DEVICE_LOCK = Lock()
+JOBS_LOCK = Lock()
+JOBS = {}
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 
@@ -53,6 +59,114 @@ def process():
             return jsonify(download=f"/download/{job}/{path.name}", job=job, filename=path.name, **info, **extra)
         except Exception as exc:
             return jsonify(error=str(exc)), 422
+
+
+@app.post("/analyze")
+def analyze():
+    upload = request.files.get("file")
+    if not upload or not upload.filename or Path(upload.filename).suffix.lower() != ".pdf":
+        return jsonify(error="Selecciona un PDF válido."), 400
+    token = uuid4().hex
+    folder = UPLOADS / token
+    folder.mkdir(parents=True)
+    source = folder / (secure_filename(upload.filename) or "libro.pdf")
+    upload.save(source)
+    try:
+        return jsonify(token=token, filename=source.name, **analyze_pdf(source))
+    except Exception as exc:
+        source.unlink(missing_ok=True)
+        folder.rmdir()
+        return jsonify(error=str(exc)), 422
+
+
+def _run_job(job, source, options, overrides, cancel):
+    state = JOBS[job]
+    def update(done, total, stage):
+        with JOBS_LOCK:
+            state.update(progress=min(95, round(done / max(total, 1) * 90)), stage=stage)
+    try:
+        path, info = convert(source, OUTPUTS / job,
+            title=options.get("title", "")[:180], author=options.get("author", "")[:180],
+            keep_images=options.get("images", True), cover=options.get("cover", True),
+            chapters=options.get("chapters", True), format=options.get("format", "kepub"),
+            kepubify=KEPUBIFY, translation=options.get("translation", "none"),
+            ocr=options.get("ocr", True), overrides=overrides, progress=update, cancelled=cancel)
+        extra = {"epub_download": f"/download/{job}/{path.stem.removesuffix('.kepub')}.epub"} if options.get("format", "kepub") == "kepub" else {}
+        with JOBS_LOCK:
+            state.update(status="done", progress=100, stage="Listo", download=f"/download/{job}/{path.name}", filename=path.name, **info, **extra)
+    except InterruptedError:
+        with JOBS_LOCK:
+            state.update(status="cancelled", stage="Cancelado")
+    except Exception as exc:
+        with JOBS_LOCK:
+            state.update(status="error", stage="Error", error=str(exc))
+    finally:
+        (OUTPUTS / job).mkdir(parents=True, exist_ok=True)
+        (OUTPUTS / job / "status.json").write_text(json.dumps({key: value for key, value in state.items() if key != "cancel"}, ensure_ascii=False), encoding="utf-8")
+        source.unlink(missing_ok=True)
+        source.parent.rmdir()
+
+
+@app.post("/start")
+def start_job():
+    data = request.get_json(silent=True) or {}
+    token = data.get("token", "")
+    filename = data.get("filename", "")
+    if not isinstance(token, str) or len(token) != 32 or any(ch not in "0123456789abcdef" for ch in token):
+        return jsonify(error="Archivo temporal no válido."), 400
+    if not isinstance(filename, str) or Path(filename).name != filename:
+        return jsonify(error="Nombre no válido."), 400
+    source = UPLOADS / token / filename
+    if not source.is_file():
+        return jsonify(error="El PDF ya no está disponible. Cárgalo otra vez."), 404
+    options = data.get("options", {})
+    if not isinstance(options, dict) or options.get("format", "kepub") not in ("epub", "kepub") or options.get("translation", "none") not in ("none", "es-en", "en-es"):
+        return jsonify(error="Opciones no válidas."), 400
+    if options.get("format", "kepub") == "kepub" and not KEPUBIFY.exists():
+        return jsonify(error="Falta kepubify. Ejecuta instalar.ps1."), 503
+    overrides = data.get("overrides", {})
+    if not isinstance(overrides, dict):
+        return jsonify(error="Cambios de vista previa no válidos."), 400
+    with JOBS_LOCK:
+        if token in JOBS:
+            return jsonify(error="Este archivo ya se está procesando."), 409
+        cancel = Event()
+        JOBS[token] = {"job": token, "status": "running", "progress": 0, "stage": "Preparando", "source": filename,
+                       "created": datetime.now(timezone.utc).isoformat(), "cancel": cancel}
+    Thread(target=_run_job, args=(token, source, options, overrides, cancel), daemon=True).start()
+    return jsonify(job=token), 202
+
+
+@app.get("/jobs/<job>")
+def job_status(job):
+    if job in JOBS:
+        with JOBS_LOCK:
+            return jsonify({key: value for key, value in JOBS[job].items() if key != "cancel"})
+    path = OUTPUTS / job / "status.json"
+    if len(job) == 32 and all(ch in "0123456789abcdef" for ch in job) and path.is_file():
+        return jsonify(json.loads(path.read_text(encoding="utf-8")))
+    abort(404)
+
+
+@app.post("/jobs/<job>/cancel")
+def cancel_job(job):
+    with JOBS_LOCK:
+        state = JOBS.get(job)
+        if not state or state["status"] != "running":
+            return jsonify(error="El proceso ya terminó."), 409
+        state["cancel"].set()
+    return jsonify(message="Cancelación solicitada.")
+
+
+@app.get("/history")
+def history():
+    records = []
+    for path in sorted(OUTPUTS.glob("*/status.json"), key=lambda item: item.stat().st_mtime, reverse=True)[:30]:
+        try:
+            records.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    return jsonify(jobs=records)
 
 
 @app.get("/download/<job>/<name>")

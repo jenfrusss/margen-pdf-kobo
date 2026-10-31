@@ -1,5 +1,10 @@
 .venv/
 __pycache__/
 outputs/
+uploads/
 tools/
+dist/
+build/
+node_modules/
+*.spec
 *.argosmodel
