@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import hashlib
 import os
 import shutil
@@ -130,25 +131,62 @@ def eject_kobo(device_id: str):
     root = Path(device["path"])
     if len(root.drive) != 2 or root.drive[1] != ":" or not root.drive[0].isalpha():
         raise ValueError("La unidad del Kobo no es válida.")
+    environment = os.environ.copy()
+    environment["MARGEN_KOBO_LETTER"] = root.drive[0]
     script = (
         "$ErrorActionPreference='Stop'; "
-        "$shell=New-Object -ComObject Shell.Application; "
-        "$item=$shell.Namespace(17).ParseName($env:MARGEN_KOBO_DRIVE); "
-        "if($null -eq $item){throw 'No se encuentra la unidad.'}; "
-        "$verb=$item.Verbs() | Where-Object { ($_.Name -replace '&','').Trim() -match '^(Eject|Expulsar)$' } | Select-Object -First 1; "
-        "if($null -eq $verb){throw 'Windows no ofrece la acción Expulsar para esta unidad.'}; "
-        "$verb.DoIt()"
+        "$partition=Get-Partition -DriveLetter $env:MARGEN_KOBO_LETTER; "
+        "$disk=Get-CimInstance Win32_DiskDrive -Filter ('Index=' + $partition.DiskNumber); "
+        "if($null -eq $disk -or $disk.InterfaceType -ne 'USB'){throw 'El Kobo no es una unidad USB.'}; "
+        "$disk.PNPDeviceID"
     )
-    environment = os.environ.copy()
-    environment["MARGEN_KOBO_DRIVE"] = root.drive
     result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-Command", script],
-        capture_output=True, text=True, timeout=20, env=environment,
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True, timeout=25, env=environment,
     )
-    if result.returncode:
-        raise RuntimeError("Windows no pudo expulsar el Kobo. Cierra archivos abiertos e inténtalo otra vez.")
+    if result.returncode or not result.stdout.strip():
+        raise RuntimeError("Windows no pudo identificar la unidad USB del Kobo.")
+    _request_usb_eject(result.stdout.strip().splitlines()[-1])
     for _ in range(20):
         if not any(item["id"] == device_id for item in connected_kobos()):
             return
         time.sleep(0.5)
     raise RuntimeError("Windows no confirmó la expulsión. Usa «Quitar hardware de forma segura» antes de desconectarlo.")
+
+
+def _request_usb_eject(disk_id: str):
+    manager = ctypes.WinDLL("CfgMgr32.dll")
+    locate = manager.CM_Locate_DevNodeW
+    locate.argtypes = [ctypes.POINTER(wintypes.ULONG), wintypes.LPWSTR, wintypes.ULONG]
+    locate.restype = wintypes.ULONG
+    parent = manager.CM_Get_Parent
+    parent.argtypes = [ctypes.POINTER(wintypes.ULONG), wintypes.ULONG, wintypes.ULONG]
+    parent.restype = wintypes.ULONG
+    get_id = manager.CM_Get_Device_IDW
+    get_id.argtypes = [wintypes.ULONG, wintypes.LPWSTR, wintypes.ULONG, wintypes.ULONG]
+    get_id.restype = wintypes.ULONG
+    eject = manager.CM_Request_Device_EjectW
+    eject.argtypes = [wintypes.ULONG, ctypes.POINTER(wintypes.ULONG), wintypes.LPWSTR, wintypes.ULONG, wintypes.ULONG]
+    eject.restype = wintypes.ULONG
+
+    node = wintypes.ULONG()
+    if locate(ctypes.byref(node), disk_id, 0):
+        raise RuntimeError("Windows no encuentra el dispositivo USB del Kobo.")
+    for _ in range(8):
+        name = ctypes.create_unicode_buffer(512)
+        if get_id(node, name, len(name), 0):
+            raise RuntimeError("Windows no pudo comprobar el dispositivo USB.")
+        if name.value.upper().startswith("USB\\VID_"):
+            break
+        next_node = wintypes.ULONG()
+        if parent(ctypes.byref(next_node), node, 0):
+            raise RuntimeError("Windows no encontró el controlador USB del Kobo.")
+        node = next_node
+    else:
+        raise RuntimeError("Windows no encontró el dispositivo USB físico del Kobo.")
+    veto = wintypes.ULONG()
+    veto_name = ctypes.create_unicode_buffer(260)
+    code = eject(node, ctypes.byref(veto), veto_name, len(veto_name), 0)
+    if code:
+        detail = veto_name.value or f"código {code}, veto {veto.value}"
+        raise RuntimeError("Windows no pudo expulsar el Kobo: " + detail)

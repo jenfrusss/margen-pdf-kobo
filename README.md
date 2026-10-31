@@ -24,7 +24,7 @@ Puedes elegir EPUB o KEPUB, traducir el texto de español a inglés o viceversa,
 
 Conecta el Kobo al ordenador y toca **Conectar** en la pantalla del lector. La app comprueba periódicamente si aparece una unidad Kobo, muestra el espacio libre y permite ver los EPUB/KEPUB de su carpeta principal; también puedes pulsar **Actualizar**. Después de convertir, pulsa **Enviar al Kobo** junto al libro. La app verifica la copia con SHA-256 y muestra la ruta final. Si el mismo archivo ya está en el lector, evita duplicarlo. Si existe otro libro con el mismo nombre, crea una copia numerada conservando la terminación `.kepub.epub` para Kobo. [Expulsa el dispositivo de forma segura](https://help.kobo.com/hc/en-us/articles/360017765933-Eject-your-Kobo-eReader-when-connected-to-a-computer) antes de desconectarlo. La detección requiere que el lector esté montado como unidad y tenga su carpeta `.kobo`.
 
-En Windows puedes pulsar **Expulsar Kobo** en la app. Usa la acción de expulsión de Windows sobre la unidad Kobo seleccionada y espera a que el sistema la retire. Solo cuando la app confirme la expulsión debes desconectar el cable. Si Windows indica que hay archivos abiertos o no confirma la expulsión, ciérralos y vuelve a intentar.
+En Windows puedes pulsar **Expulsar Kobo** en la app. Usa la API de extracción segura de Windows sobre el dispositivo USB asociado a la unidad Kobo y espera a que el sistema la retire. Solo cuando la app confirme la expulsión debes desconectar el cable. Si Windows indica que hay archivos abiertos o no confirma la expulsión, ciérralos y vuelve a intentar.
 
 ## Alcance
 

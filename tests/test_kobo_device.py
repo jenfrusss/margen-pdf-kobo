@@ -1,8 +1,9 @@
 import tempfile
 import unittest
+import ctypes
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import kobo_device
 import app as web_app
@@ -54,9 +55,32 @@ class KoboDeviceTest(unittest.TestCase):
 
     def test_eject_requests_windows_action_and_waits_for_disconnect(self):
         device = {"id": "E:\\", "label": "KOBOeReader", "path": "E:\\"}
-        with patch.object(kobo_device, "connected_kobos", side_effect=[[device], []]), patch.object(kobo_device.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
+        command = SimpleNamespace(returncode=0, stdout="USBSTOR\\DISK&VEN_LINUX\\SERIAL&0\n")
+        with patch.object(kobo_device, "connected_kobos", side_effect=[[device], []]), patch.object(kobo_device.subprocess, "run", return_value=command) as run, patch.object(kobo_device, "_request_usb_eject") as eject:
             kobo_device.eject_kobo("E:\\")
-            self.assertEqual(run.call_args.kwargs["env"]["MARGEN_KOBO_DRIVE"], "E:")
+            self.assertEqual(run.call_args.kwargs["env"]["MARGEN_KOBO_LETTER"], "E")
+            eject.assert_called_once_with("USBSTOR\\DISK&VEN_LINUX\\SERIAL&0")
+
+    def test_native_eject_walks_to_usb_parent(self):
+        def locate(pointer, _id, _flags):
+            ctypes.cast(pointer, ctypes.POINTER(kobo_device.wintypes.ULONG)).contents.value = 1
+            return 0
+
+        def parent(pointer, _node, _flags):
+            ctypes.cast(pointer, ctypes.POINTER(kobo_device.wintypes.ULONG)).contents.value = 2
+            return 0
+
+        def get_id(node, buffer, _length, _flags):
+            buffer.value = "USB\\VID_2237&PID_4237\\KOBO" if node.value == 2 else "USBSTOR\\DISK\\KOBO"
+            return 0
+
+        manager = SimpleNamespace(CM_Locate_DevNodeW=Mock(side_effect=locate),
+                                  CM_Get_Parent=Mock(side_effect=parent),
+                                  CM_Get_Device_IDW=Mock(side_effect=get_id),
+                                  CM_Request_Device_EjectW=Mock(return_value=0))
+        with patch.object(kobo_device.ctypes, "WinDLL", return_value=manager):
+            kobo_device._request_usb_eject("USBSTOR\\DISK\\KOBO")
+        manager.CM_Request_Device_EjectW.assert_called_once()
 
     def test_eject_api_reports_failure(self):
         client = web_app.app.test_client()
