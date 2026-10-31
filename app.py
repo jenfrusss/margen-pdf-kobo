@@ -6,6 +6,7 @@ from flask import Flask, abort, jsonify, render_template, request, send_from_dir
 from werkzeug.utils import secure_filename
 
 from converter import convert
+from kobo_device import connected_kobos, copy_to_kobo
 
 BASE = Path(__file__).resolve().parent
 OUTPUTS = BASE / "outputs"
@@ -45,7 +46,7 @@ def process():
                 format=fmt, kepubify=KEPUBIFY,
                 translation=request.form.get("translation", "none"),
             )
-            return jsonify(download=f"/download/{job}/{path.name}", filename=path.name, **info)
+            return jsonify(download=f"/download/{job}/{path.name}", job=job, filename=path.name, **info)
         except Exception as exc:
             return jsonify(error=str(exc)), 422
 
@@ -57,6 +58,30 @@ def download(job, name):
     if not name.endswith((".epub", ".kepub.epub")):
         abort(404)
     return send_from_directory(OUTPUTS / job, name, as_attachment=True)
+
+
+@app.get("/devices")
+def devices():
+    return jsonify(devices=connected_kobos())
+
+
+@app.post("/send-to-kobo")
+def send_to_kobo():
+    data = request.get_json(silent=True) or {}
+    job = data.get("job", "")
+    filename = data.get("filename", "")
+    device_id = data.get("device", "")
+    if not isinstance(job, str) or len(job) != 32 or any(ch not in "0123456789abcdef" for ch in job):
+        return jsonify(error="Libro no válido."), 400
+    if not isinstance(filename, str) or Path(filename).name != filename or not filename.endswith(".epub"):
+        return jsonify(error="Nombre de libro no válido."), 400
+    if not isinstance(device_id, str):
+        return jsonify(error="Selecciona un Kobo válido."), 400
+    try:
+        path = copy_to_kobo(OUTPUTS / job / filename, device_id)
+        return jsonify(path=path)
+    except (ValueError, OSError) as exc:
+        return jsonify(error=str(exc)), 422
 
 
 @app.errorhandler(413)
