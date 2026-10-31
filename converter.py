@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pymupdf
+from translation import LANGUAGE_PAIRS, get_translator
 
 
 def _safe(text: str) -> str:
@@ -33,7 +34,9 @@ def _paragraphs(page):
     return result
 
 
-def convert(pdf_path: Path, output_dir: Path, title: str = "", author: str = "", keep_images: bool = True, cover: bool = True, chapters: bool = True, format: str = "kepub", kepubify: Path | None = None):
+def convert(pdf_path: Path, output_dir: Path, title: str = "", author: str = "", keep_images: bool = True, cover: bool = True, chapters: bool = True, format: str = "kepub", kepubify: Path | None = None, translation: str = "none"):
+    translator = get_translator(translation)
+    custom_title = bool(title.strip())
     doc = pymupdf.open(pdf_path)
     try:
         if doc.is_encrypted and not doc.authenticate(""):
@@ -41,9 +44,13 @@ def convert(pdf_path: Path, output_dir: Path, title: str = "", author: str = "",
         if not doc.page_count:
             raise ValueError("El PDF no contiene páginas.")
         title = title.strip() or str(doc.metadata.get("title") or "").strip() or pdf_path.stem
+        if translator and not custom_title:
+            title = translator.translate(title)
         author = author.strip() or str(doc.metadata.get("author") or "").strip() or "Autor desconocido"
         toc = doc.get_toc() if chapters else []
         chapter_by_page = {max(0, page - 1): name for level, name, page in toc if level == 1 and 1 <= page <= doc.page_count}
+        if translator:
+            chapter_by_page = {page: translator.translate(name) for page, name in chapter_by_page.items()}
         if not chapter_by_page:
             chapter_by_page = {0: title}
         pages = []
@@ -55,7 +62,8 @@ def convert(pdf_path: Path, output_dir: Path, title: str = "", author: str = "",
                 if kind == "text":
                     if len(value.strip()) > 1:
                         count += len(value)
-                        parts.append(f"<p>{_safe(value)}</p>")
+                        translated = translator.translate(value) if translator else value
+                        parts.append(f"<p>{_safe(translated)}</p>")
                 elif keep_images and len(value["image"]) < 8_000_000:
                     ext = value.get("ext", "png").lower()
                     if ext not in ("png", "jpg", "jpeg", "gif"):
@@ -97,8 +105,9 @@ def convert(pdf_path: Path, output_dir: Path, title: str = "", author: str = "",
         manifest.append('<item id="coverpage" href="cover.xhtml" media-type="application/xhtml+xml"/>')
         spine.insert(0, '<itemref idref="coverpage"/>')
     modified = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    output_language = LANGUAGE_PAIRS[translation][1] if translation != "none" else "es"
     opf = f'''<?xml version="1.0" encoding="utf-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="es"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:{uid}</dc:identifier><dc:title>{_safe(title)}</dc:title><dc:creator>{_safe(author)}</dc:creator><dc:language>es</dc:language><meta property="dcterms:modified">{modified}</meta></metadata><manifest>{''.join(manifest)}</manifest><spine>{''.join(spine)}</spine></package>'''
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="{output_language}"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:{uid}</dc:identifier><dc:title>{_safe(title)}</dc:title><dc:creator>{_safe(author)}</dc:creator><dc:language>{output_language}</dc:language><meta property="dcterms:modified">{modified}</meta></metadata><manifest>{''.join(manifest)}</manifest><spine>{''.join(spine)}</spine></package>'''
     nav_items = ''.join(f'<li><a href="section-{n}.xhtml">{_safe(s["title"])}</a></li>' for n, s in enumerate(sections, 1))
     nav = f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Índice</title></head><body><nav epub:type="toc" id="toc"><h1>Índice</h1><ol>{nav_items}</ol></nav></body></html>'
     with zipfile.ZipFile(epub_path, "w") as book:

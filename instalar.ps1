@@ -6,4 +6,5 @@ New-Item -ItemType Directory -Force -Path tools | Out-Null
 if (-not (Test-Path 'tools\kepubify.exe')) {
     Invoke-WebRequest 'https://github.com/pgaskin/kepubify/releases/download/v4.0.4/kepubify-windows-64bit.exe' -OutFile 'tools\kepubify.exe'
 }
+& '.venv\Scripts\python.exe' instalar_modelos.py
 Write-Host 'Instalación lista. Ejecuta iniciar.ps1.'

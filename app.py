@@ -43,6 +43,7 @@ def process():
                 cover=request.form.get("cover") == "on",
                 chapters=request.form.get("chapters") == "on",
                 format=fmt, kepubify=KEPUBIFY,
+                translation=request.form.get("translation", "none"),
             )
             return jsonify(download=f"/download/{job}/{path.name}", filename=path.name, **info)
         except Exception as exc:
