@@ -194,18 +194,36 @@ function previewCard(item) {
   card.append(sample);
   const chapter = document.createElement('details');
   const chapterSummary = document.createElement('summary');
-  chapterSummary.textContent = 'Nombres de secciones (' + item.sections.length + ')';
+  chapterSummary.textContent = 'Cortes y nombres de secciones';
   chapter.append(chapterSummary);
+  const sectionList = document.createElement('div');
+  sectionList.className = 'section-list';
+  const addSection = (pageNumber, sectionTitle) => {
+    const row = document.createElement('div'); row.className = 'section-row';
+    const pageLabel = document.createElement('label'); pageLabel.textContent = 'Desde página';
+    const pageField = document.createElement('input'); pageField.type = 'number'; pageField.min = 1; pageField.max = item.pages;
+    pageField.value = pageNumber; pageField.className = 'section-page';
+    if (pageNumber === 1) pageField.readOnly = true;
+    pageLabel.append(pageField);
+    const titleLabel = document.createElement('label'); titleLabel.textContent = 'Nombre de sección';
+    const titleField = document.createElement('input'); titleField.value = sectionTitle; titleField.className = 'section-title';
+    titleLabel.append(titleField); row.append(pageLabel, titleLabel);
+    if (pageNumber !== 1) {
+      const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Quitar';
+      remove.setAttribute('aria-label', 'Quitar sección desde página ' + pageNumber);
+      remove.onclick = () => row.remove(); row.append(remove);
+    }
+    sectionList.append(row);
+  };
   item.sections.forEach(section => {
-    const label = document.createElement('label');
-    label.textContent = 'Desde página ' + section.page;
-    const field = document.createElement('input');
-    field.value = section.title;
-    field.dataset.original = section.title;
-    field.dataset.section = section.page;
-    label.append(field);
-    chapter.append(label);
+    addSection(section.page, section.title);
   });
+  chapter.append(sectionList);
+  if (item.pages > 1) {
+    const add = document.createElement('button'); add.type = 'button'; add.className = 'add-section';
+    add.textContent = '+ Añadir sección'; add.onclick = () => addSection(2, 'Nueva sección'); chapter.append(add);
+  }
+  const sectionError = document.createElement('p'); sectionError.className = 'error section-error'; chapter.append(sectionError);
   card.append(chapter);
   item.card = card;
   return card;
@@ -275,15 +293,30 @@ form.onsubmit = async event => {
     return;
   }
   if (stage !== 'preview') return;
+  let invalidSections = false;
+  for (const item of analyses) {
+    const rows = [...item.card.querySelectorAll('.section-row')];
+    const pages = rows.map(row => Number(row.querySelector('.section-page').value));
+    const titles = rows.map(row => row.querySelector('.section-title').value.trim());
+    const invalid = pages.some(page => !Number.isInteger(page) || page < 1 || page > item.pages) ||
+      new Set(pages).size !== pages.length || titles.some(title => !title || title.length > 120);
+    item.card.querySelector('.section-error').textContent = invalid ? 'Revisa los cortes: cada sección necesita una página distinta y un título.' : '';
+    if (invalid) { item.card.querySelector('details:last-of-type').open = true; invalidSections = true; }
+  }
+  if (invalidSections) return;
   stage = 'busy'; button.disabled = true; button.textContent = 'Iniciando…';
   results.textContent = '';
   const data = new FormData(form);
   const options = { format: data.get('format'), translation: data.get('translation'), title: data.get('title'), author: data.get('author'),
     cover: data.has('cover'), chapters: data.has('chapters'), images: data.has('images'), ocr: data.has('ocr') };
   for (const item of analyses) {
-    const overrides = { pages: {}, sections: {} };
+    const overrides = { pages: {} };
     item.card.querySelectorAll('textarea[data-page]').forEach(field => { if (field.value !== field.dataset.original) overrides.pages[field.dataset.page] = field.value; });
-    item.card.querySelectorAll('input[data-section]').forEach(field => { if (field.value !== field.dataset.original) overrides.sections[field.dataset.section] = field.value; });
+    const breaks = [];
+    item.card.querySelectorAll('.section-row').forEach(row => {
+      breaks.push({ page: Number(row.querySelector('.section-page').value), title: row.querySelector('.section-title').value.trim() });
+    });
+    if (JSON.stringify(breaks) !== JSON.stringify(item.sections)) overrides.breaks = breaks;
     const row = document.createElement('div'); row.className = 'job-row'; results.append(row);
     try {
       const response = await fetch('/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: item.token, filename: item.filename, options, overrides }) });

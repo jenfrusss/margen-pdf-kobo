@@ -41,6 +41,8 @@ def analyze_pdf(path: Path, sample_pages: int = 3):
     try:
         if doc.is_encrypted and not doc.authenticate(""):
             raise ValueError("El PDF está protegido con contraseña.")
+        if not len(doc):
+            raise ValueError("El PDF no contiene páginas.")
         samples, scanned, images, columns, tables = [], 0, 0, 0, 0
         toc = {page - 1: title for level, title, page in doc.get_toc()
                if level == 1 and 1 <= page <= len(doc)}

@@ -114,6 +114,21 @@ def convert(pdf_path: Path, output_dir: Path, title: str = "", author: str = "",
             chapter_by_page = {page: translator.translate(name) for page, name in chapter_by_page.items()}
         if not chapter_by_page:
             chapter_by_page = {0: title}
+        if "breaks" in overrides:
+            breaks = overrides["breaks"]
+            if not isinstance(breaks, list) or len(breaks) > doc.page_count:
+                raise ValueError("Los cortes de capítulo no son válidos.")
+            chapter_by_page = {0: title}
+            for section in breaks:
+                if not isinstance(section, dict) or type(section.get("page")) is not int or not isinstance(section.get("title"), str):
+                    raise ValueError("Los cortes de capítulo no son válidos.")
+                page_number = section["page"]
+                section_title = section["title"].strip()
+                if not 1 <= page_number <= doc.page_count or not section_title or len(section_title) > 120:
+                    raise ValueError("Revisa la página y el título de cada sección.")
+                if page_number - 1 in chapter_by_page and page_number != 1:
+                    raise ValueError("Hay dos secciones que comienzan en la misma página.")
+                chapter_by_page[page_number - 1] = section_title
         pages = []
         page_headings = []
         images = []

@@ -16,8 +16,9 @@ class WorkflowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             document = pymupdf.open()
-            page = document.new_page()
-            page.insert_text((70, 100), "Original chapter text in a readable PDF document. " * 3)
+            for _ in range(3):
+                page = document.new_page()
+                page.insert_text((70, 100), "Original chapter text in a readable PDF document. " * 3)
             source = root / "book.pdf"
             document.save(source)
             document.close()
@@ -32,7 +33,8 @@ class WorkflowTest(unittest.TestCase):
                 start = client.post("/start", json={"token": data["token"], "filename": data["filename"],
                                                     "options": {"format": "epub", "translation": "none", "ocr": True},
                                                     "overrides": {"pages": {"1": "Edited text that will appear in the finished electronic book."},
-                                                                  "sections": {"1": "Edited chapter"}}})
+                                                                  "breaks": [{"page": 1, "title": "Edited chapter"},
+                                                                             {"page": 2, "title": "New chapter break"}]}})
                 self.assertEqual(start.status_code, 202)
                 job = start.get_json()["job"]
                 for _ in range(100):
@@ -46,6 +48,8 @@ class WorkflowTest(unittest.TestCase):
                     section = book.read("OEBPS/section-1.xhtml").decode()
                     self.assertIn("Edited text", section)
                     self.assertIn("Edited chapter", section)
+                    second = book.read("OEBPS/section-2.xhtml").decode()
+                    self.assertIn("New chapter break", second)
                 download = client.get(state["download"])
                 self.assertEqual(download.status_code, 200)
                 download.close()
