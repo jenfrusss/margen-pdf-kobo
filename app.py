@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 
 from converter import convert
 from book_tools import analyze_pdf
-from kobo_device import connected_kobos, copy_to_kobo, eject_kobo
+from kobo_device import connected_kobos, copy_to_kobo, eject_kobo, kobo_library
 
 BASE = Path(__file__).resolve().parent
 OUTPUTS = BASE / "outputs"
@@ -183,6 +183,15 @@ def devices():
     return jsonify(devices=connected_kobos())
 
 
+@app.get("/kobo-library")
+def device_library():
+    device_id = request.args.get("device", "")
+    try:
+        return jsonify(kobo_library(device_id))
+    except (ValueError, OSError) as exc:
+        return jsonify(error=str(exc)), 422
+
+
 @app.post("/send-to-kobo")
 def send_to_kobo():
     data = request.get_json(silent=True) or {}
@@ -197,8 +206,8 @@ def send_to_kobo():
         return jsonify(error="Selecciona un Kobo válido."), 400
     try:
         with DEVICE_LOCK:
-            path = copy_to_kobo(OUTPUTS / job / filename, device_id)
-        return jsonify(path=path)
+            result = copy_to_kobo(OUTPUTS / job / filename, device_id)
+        return jsonify(result)
     except (ValueError, OSError) as exc:
         return jsonify(error=str(exc)), 422
 

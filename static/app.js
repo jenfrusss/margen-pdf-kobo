@@ -9,6 +9,8 @@ const deviceHint = document.querySelector('#device-hint');
 const deviceChoice = document.querySelector('#device-choice');
 const deviceSelect = document.querySelector('#device-select');
 const ejectButton = document.querySelector('#device-eject');
+const libraryButton = document.querySelector('#device-library-toggle');
+const libraryPanel = document.querySelector('#kobo-library');
 let files = [];
 let analyses = [];
 let stage = 'select';
@@ -76,20 +78,56 @@ async function refreshDevices() {
     if (devices.some(device => device.id === previous)) deviceSelect.value = previous;
     deviceChoice.hidden = !devices.length;
     ejectButton.disabled = !devices.length;
+    libraryButton.disabled = !devices.length;
     if (devices.length) lastEjected = false;
+    const selected = devices.find(device => device.id === deviceSelect.value) || devices[0];
     deviceStatus.textContent = devices.length ? (devices.length === 1 ? 'Kobo conectado' : devices.length + ' Kobo conectados') : (lastEjected ? 'Kobo expulsado con seguridad' : 'Kobo no conectado');
-    deviceHint.textContent = ejectMessage || (devices.length ? 'Puedes enviar el libro al terminar de convertir.' : (lastEjected ? 'Ya puedes desconectarlo.' : 'Conecta el lector por USB y toca «Conectar» en su pantalla.'));
+    deviceHint.textContent = ejectMessage || (selected ? (selected.free_bytes / 1024 ** 3).toFixed(1) + ' GB libres en ' + selected.path + '. Puedes enviar el libro al terminar de convertir.' : (lastEjected ? 'Ya puedes desconectarlo.' : 'Conecta el lector por USB y toca «Conectar» en su pantalla.'));
+    if (!devices.length) { libraryPanel.hidden = true; libraryButton.textContent = 'Ver libros'; }
     document.querySelectorAll('.send-kobo').forEach(send => { if (!send.dataset.sent) send.disabled = !devices.length; });
   } catch {
     deviceStatus.textContent = 'No se pudo comprobar el Kobo';
     deviceHint.textContent = 'Pulsa Actualizar para intentarlo de nuevo.';
     deviceChoice.hidden = true;
     ejectButton.disabled = true;
+    libraryButton.disabled = true;
+    libraryPanel.hidden = true;
     document.querySelectorAll('.send-kobo').forEach(send => { send.disabled = true; });
   }
 }
 
 document.querySelector('#device-refresh').onclick = () => { ejectMessage = ''; refreshDevices(); };
+async function refreshLibrary() {
+  const list = document.querySelector('#kobo-library-list');
+  list.textContent = 'Leyendo libros…';
+  try {
+    const response = await fetch('/kobo-library?device=' + encodeURIComponent(deviceSelect.value), { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'No se pudo leer la biblioteca.');
+    document.querySelector('#kobo-library-summary').textContent = data.books.length + ' libros · ' +
+      (data.device.free_bytes / 1024 ** 3).toFixed(1) + ' GB libres · ' + data.device.path;
+    list.textContent = data.books.length ? '' : 'No hay EPUB en la carpeta principal.';
+    data.books.slice(0, 30).forEach(book => {
+      const row = document.createElement('div'); row.className = 'kobo-book';
+      const name = document.createElement('span'); name.textContent = book.name;
+      const meta = document.createElement('small'); meta.textContent = book.kind + ' · ' + (book.size_bytes / 1024 ** 2).toFixed(1) + ' MB';
+      row.append(name, meta); list.append(row);
+    });
+    if (data.books.length > 30) {
+      const more = document.createElement('p'); more.textContent = 'Se muestran los 30 más recientes.'; list.append(more);
+    }
+  } catch (error) { list.textContent = error.message; }
+}
+libraryButton.onclick = () => {
+  libraryPanel.hidden = !libraryPanel.hidden;
+  libraryButton.textContent = libraryPanel.hidden ? 'Ver libros' : 'Ocultar libros';
+  if (!libraryPanel.hidden) refreshLibrary();
+};
+deviceSelect.onchange = () => {
+  document.querySelectorAll('.send-kobo').forEach(send => { send.dataset.sent = ''; send.disabled = false; send.textContent = 'Enviar al Kobo'; });
+  if (!libraryPanel.hidden) refreshLibrary();
+  refreshDevices();
+};
 ejectButton.onclick = async () => {
   const device = deviceSelect.value;
   if (!device || ejecting) return;
@@ -132,7 +170,9 @@ async function sendToKobo(result, send, feedback) {
     if (!response.ok) throw new Error(data.error || 'No se pudo copiar el libro.');
     send.textContent = 'Enviado';
     send.dataset.sent = 'true';
-    feedback.textContent = 'Guardado en ' + data.path + '. Expulsa el Kobo de forma segura antes de desconectarlo.';
+    feedback.textContent = (data.already_present ? 'Este mismo libro ya estaba en ' : 'Copia verificada en ') + data.path + '. Expulsa el Kobo de forma segura antes de desconectarlo.';
+    if (!libraryPanel.hidden) refreshLibrary();
+    refreshDevices();
   } catch (error) {
     send.textContent = 'Enviar al Kobo';
     send.disabled = !deviceSelect.value;

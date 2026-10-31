@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
 import shutil
 import subprocess
@@ -47,10 +48,36 @@ def connected_kobos():
             marker = root / ".kobo"
             label = _volume_label(root)
             if marker.is_dir() and (label.lower() == "koboereader" or (marker / "KoboReader.sqlite").is_file()):
-                devices.append({"id": str(root), "label": label or "Kobo", "path": str(root)})
+                space = shutil.disk_usage(root)
+                devices.append({"id": str(root), "label": label or "Kobo", "path": str(root),
+                                "free_bytes": space.free, "total_bytes": space.total})
         except OSError:
             continue
     return devices
+
+
+def kobo_library(device_id: str):
+    device = next((item for item in connected_kobos() if item["id"] == device_id), None)
+    if device is None:
+        raise ValueError("No se detecta ese Kobo. Conéctalo por USB y toca Conectar en el lector.")
+    root = Path(device["path"])
+    books = []
+    for path in root.iterdir():
+        if path.is_file() and path.name.lower().endswith(".epub"):
+            info = path.stat()
+            books.append({"name": path.name, "size_bytes": info.st_size,
+                          "kind": "KEPUB" if path.name.lower().endswith(".kepub.epub") else "EPUB",
+                          "modified": info.st_mtime})
+    books.sort(key=lambda book: book["modified"], reverse=True)
+    return {"device": device, "books": books}
+
+
+def _sha256(path: Path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
 
 
 def copy_to_kobo(source: Path, device_id: str):
@@ -60,32 +87,38 @@ def copy_to_kobo(source: Path, device_id: str):
     root = Path(device["path"])
     if not source.is_file() or source.suffix.lower() != ".epub":
         raise ValueError("El libro convertido no está disponible.")
-    if shutil.disk_usage(root).free < source.stat().st_size + 1024 * 1024:
-        raise ValueError("El Kobo no tiene espacio suficiente para este libro.")
+    source_hash = _sha256(source)
+    suffix = ".kepub.epub" if source.name.lower().endswith(".kepub.epub") else ".epub"
+    base = source.name[:-len(suffix)]
     target = root / source.name
     if target.exists():
-        base = source.name[:-5]
+        if target.stat().st_size == source.stat().st_size and _sha256(target) == source_hash:
+            return {"path": str(target), "already_present": True}
         for index in range(2, 1000):
-            target = root / f"{base} ({index}).epub"
+            target = root / f"{base} ({index}){suffix}"
             if not target.exists():
                 break
+            if target.stat().st_size == source.stat().st_size and _sha256(target) == source_hash:
+                return {"path": str(target), "already_present": True}
         else:
             raise ValueError("Hay demasiadas copias de este libro en el Kobo.")
+    if shutil.disk_usage(root).free < source.stat().st_size + 1024 * 1024:
+        raise ValueError("El Kobo no tiene espacio suficiente para este libro.")
     temporary = root / f".margen-{uuid.uuid4().hex}.part"
     try:
         with source.open("rb") as src, temporary.open("xb") as dst:
             shutil.copyfileobj(src, dst, length=1024 * 1024)
             dst.flush()
             os.fsync(dst.fileno())
-        if temporary.stat().st_size != source.stat().st_size:
-            raise OSError("La copia quedó incompleta.")
+        if temporary.stat().st_size != source.stat().st_size or _sha256(temporary) != source_hash:
+            raise OSError("La copia no coincide con el libro original.")
         temporary.replace(target)
     finally:
         try:
             temporary.unlink(missing_ok=True)
         except OSError:
             pass
-    return str(target)
+    return {"path": str(target), "already_present": False}
 
 
 def eject_kobo(device_id: str):

@@ -19,11 +19,22 @@ class KoboDeviceTest(unittest.TestCase):
             with patch.object(kobo_device, "_candidate_roots", return_value=[root]), patch.object(kobo_device, "_volume_label", return_value="KOBOeReader"):
                 devices = kobo_device.connected_kobos()
                 self.assertEqual(len(devices), 1)
-                first = Path(kobo_device.copy_to_kobo(source, devices[0]["id"]))
-                second = Path(kobo_device.copy_to_kobo(source, devices[0]["id"]))
+                self.assertGreater(devices[0]["free_bytes"], 0)
+                first_result = kobo_device.copy_to_kobo(source, devices[0]["id"])
+                second_result = kobo_device.copy_to_kobo(source, devices[0]["id"])
+                first = Path(first_result["path"])
+                second = Path(second_result["path"])
                 self.assertEqual(first.read_bytes(), b"book contents")
                 self.assertEqual(second.read_bytes(), b"book contents")
-                self.assertNotEqual(first, second)
+                self.assertEqual(first, second)
+                self.assertTrue(second_result["already_present"])
+                source.write_bytes(b"updated book contents")
+                third = Path(kobo_device.copy_to_kobo(source, devices[0]["id"])["path"])
+                self.assertEqual(third.name, "Libro (2).kepub.epub")
+                self.assertEqual(third.read_bytes(), b"updated book contents")
+                library = kobo_device.kobo_library(devices[0]["id"])
+                self.assertEqual({book["name"] for book in library["books"]},
+                                 {"Libro.kepub.epub", "Libro (2).kepub.epub"})
                 self.assertFalse(list(root.glob("*.part")))
 
     def test_rejects_disconnected_device(self):
