@@ -49,7 +49,8 @@ def process():
                 format=fmt, kepubify=KEPUBIFY,
                 translation=request.form.get("translation", "none"),
             )
-            return jsonify(download=f"/download/{job}/{path.name}", job=job, filename=path.name, **info)
+            extra = {"epub_download": f"/download/{job}/{path.stem.removesuffix('.kepub')}.epub"} if fmt == "kepub" else {}
+            return jsonify(download=f"/download/{job}/{path.name}", job=job, filename=path.name, **info, **extra)
         except Exception as exc:
             return jsonify(error=str(exc)), 422
 

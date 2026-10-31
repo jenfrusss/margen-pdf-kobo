@@ -152,7 +152,12 @@ form.onsubmit = async event => {
       label.textContent = result.filename + ' · ' + result.pages + ' páginas';
       const link = document.createElement('a');
       link.href = result.download;
-      link.textContent = 'Descargar';
+      link.textContent = result.filename.endsWith('.kepub.epub') ? 'Descargar KEPUB' : 'Descargar EPUB';
+      const epubLink = document.createElement('a');
+      if (result.epub_download) {
+        epubLink.href = result.epub_download;
+        epubLink.textContent = 'Descargar EPUB';
+      }
       const send = document.createElement('button');
       send.type = 'button';
       send.className = 'send-kobo';
@@ -161,7 +166,9 @@ form.onsubmit = async event => {
       const feedback = document.createElement('small');
       feedback.className = 'send-feedback';
       send.onclick = () => sendToKobo(result, send, feedback);
-      row.append(label, link, send, feedback);
+      row.append(label, link);
+      if (result.epub_download) row.append(epubLink);
+      row.append(send, feedback);
     } catch (error) {
       row.classList.add('error');
       row.textContent = file.name + ': ' + error.message;

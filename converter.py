@@ -6,6 +6,7 @@ import re
 import subprocess
 import uuid
 import zipfile
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,6 +21,13 @@ def _safe(text: str) -> str:
 def _paragraphs(page):
     result = []
     data = page.get_text("dict", sort=True)
+    sizes = Counter()
+    for block in data["blocks"]:
+        if block["type"] == 0:
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    sizes[round(span["size"], 1)] += len(span["text"].strip())
+    body_size = sizes.most_common(1)[0][0] if sizes else 12
     for block in data["blocks"]:
         if block["type"] == 0:
             lines = []
@@ -28,9 +36,28 @@ def _paragraphs(page):
                 if value:
                     lines.append(value)
             if lines:
-                result.append(("text", " ".join(lines)))
+                value = " ".join(lines)
+                biggest = max((span["size"] for line in block["lines"] for span in line.get("spans", [])), default=body_size)
+                kind = "heading" if biggest >= body_size * 1.12 and len(value) <= 120 else "text"
+                result.append((kind, value))
         elif block["type"] == 1 and block.get("image"):
             result.append(("image", block))
+    return result
+
+
+def _make_cover(title: str, author: str) -> bytes:
+    """Create a simple book cover, without embedding a fixed PDF page."""
+    cover = pymupdf.open()
+    page = cover.new_page(width=900, height=1200)
+    page.draw_rect(page.rect, color=None, fill=(0.78, 0.88, 0.79))
+    page.draw_line((85, 125), (815, 125), color=(0.12, 0.31, 0.25), width=3)
+    title_rect = pymupdf.Rect(85, 260, 815, 850)
+    for size in (64, 58, 50, 42, 34, 28):
+        if page.insert_textbox(title_rect, title, fontsize=size, fontname="helv", color=(0.08, 0.22, 0.18)) >= 0:
+            break
+    page.insert_textbox(pymupdf.Rect(85, 930, 815, 1080), author, fontsize=28, fontname="helv", color=(0.18, 0.36, 0.29))
+    result = page.get_pixmap(matrix=pymupdf.Matrix(1, 1), alpha=False).tobytes("jpeg")
+    cover.close()
     return result
 
 
@@ -54,16 +81,22 @@ def convert(pdf_path: Path, output_dir: Path, title: str = "", author: str = "",
         if not chapter_by_page:
             chapter_by_page = {0: title}
         pages = []
+        page_headings = []
         images = []
         count = 0
         for i, page in enumerate(doc):
             parts = []
+            headings = []
             for kind, value in _paragraphs(page):
-                if kind == "text":
+                if kind in ("text", "heading"):
                     if len(value.strip()) > 1:
                         count += len(value)
                         translated = translator.translate(value) if translator else value
-                        parts.append(f"<p>{_safe(translated)}</p>")
+                        if kind == "heading":
+                            headings.append(translated)
+                            parts.append(f"<h2>{_safe(translated)}</h2>")
+                        else:
+                            parts.append(f"<p>{_safe(translated)}</p>")
                 elif keep_images and len(value["image"]) < 8_000_000:
                     ext = value.get("ext", "png").lower()
                     if ext not in ("png", "jpg", "jpeg", "gif"):
@@ -72,12 +105,10 @@ def convert(pdf_path: Path, output_dir: Path, title: str = "", author: str = "",
                     images.append((name, value["image"], "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"))
                     parts.append(f'<figure><img src="images/{name}" alt="Imagen de la página {i+1}"/></figure>')
             pages.append(parts)
+            page_headings.append(headings)
         if count < max(40, doc.page_count * 8):
             raise ValueError("No se detectó texto seleccionable. Este PDF parece escaneado y necesita OCR.")
-        cover_bytes = None
-        if cover:
-            pix = doc[0].get_pixmap(matrix=pymupdf.Matrix(1.35, 1.35), alpha=False)
-            cover_bytes = pix.tobytes("jpeg")
+        cover_bytes = _make_cover(title, author) if cover else None
     finally:
         doc.close()
 
@@ -87,12 +118,15 @@ def convert(pdf_path: Path, output_dir: Path, title: str = "", author: str = "",
     uid = str(uuid.uuid4())
     sections = []
     current = None
+    section_start = 0
     for index, parts in enumerate(pages):
-        if index in chapter_by_page or current is None:
-            current = {"title": chapter_by_page.get(index, f"Página {index+1}"), "parts": []}
+        if current is None or index in chapter_by_page or index - section_start >= 12:
+            section_start = index
+            section_title = chapter_by_page.get(index) or (page_headings[index][0] if page_headings[index] else f"Páginas {index+1}–{min(index+12, len(pages))}")
+            current = {"title": section_title, "parts": []}
             sections.append(current)
         current["parts"].extend(parts)
-    css = "body{font-family:serif;line-height:1.5;margin:5%}h1{font-size:1.5em;line-height:1.2}p{margin:0 0 .8em;text-align:left}img{max-width:100%;height:auto}figure{margin:1em 0;text-align:center}"
+    css = "body{font-family:serif;line-height:1.5;margin:5%}h1{font-size:1.5em;line-height:1.2}h2{font-size:1.2em;line-height:1.25;margin:1.2em 0 .5em}p{margin:0 0 .8em;text-align:left}img{max-width:100%;height:auto}figure{margin:1em 0;text-align:center}"
     manifest = ['<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>', '<item id="style" href="style.css" media-type="text/css"/>']
     spine = []
     for n, _ in enumerate(sections, 1):
